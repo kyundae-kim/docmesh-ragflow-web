@@ -81,4 +81,28 @@ describe('RAG Flow workspace', () => {
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === '/api/documents/doc-2/ingestion-progress?job_id=job-2')).toBe(true));
   });
+
+  it('changes the main view and active sidebar tab', async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText('architecture.md').length).toBeGreaterThan(0));
+
+    const overviewTab = screen.getByRole('button', { name: /^Overview$/ });
+    const documentsTab = screen.getByRole('button', { name: /^Documents/ });
+    expect(overviewTab).toHaveAttribute('aria-current', 'page');
+
+    fireEvent.click(documentsTab);
+    expect(screen.getByRole('heading', { name: 'Documents' })).toBeInTheDocument();
+    expect(documentsTab).toHaveAttribute('aria-current', 'page');
+    expect(overviewTab).not.toHaveAttribute('aria-current', 'page');
+    expect(screen.queryByText('Your library is ready for the next question.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Query console' }));
+    expect(screen.getByRole('heading', { name: 'Query console' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'API health' }));
+    expect(screen.getByRole('heading', { name: 'API health' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+  });
 });
