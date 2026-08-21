@@ -26,6 +26,20 @@ test('documents proxy uses the exact upstream path and fixed server scope', asyn
   assert.equal(observed.options.headers.get('x-user-id'), 'ragflow');
 });
 
+test('the default upstream target is the live ragflow service', async () => {
+  let observedUrl;
+  const fetchImpl = async (url) => {
+    observedUrl = url;
+    return jsonResponse([]);
+  };
+
+  const app = createApp({ fetchImpl });
+  const response = await request(app).get('/api/documents');
+
+  assert.equal(response.status, 200);
+  assert.equal(observedUrl, 'http://ragflow:8000/documents');
+});
+
 test('upstream errors are reduced to the public error envelope', async () => {
   const fetchImpl = async () => jsonResponse({
     code: 'request_validation_failed',

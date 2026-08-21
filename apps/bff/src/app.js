@@ -5,9 +5,10 @@ import path from 'node:path';
 
 const EXPECTED_API_VERSION = '0.1.0';
 const SERVICE_USER_ID = 'ragflow';
+const DEFAULT_RAGFLOW_BASE_URL = 'http://ragflow:8000';
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
-const normalizeBaseUrl = (value) => String(value || 'http://localhost:8000').replace(/\/+$/, '');
+const normalizeBaseUrl = (value) => String(value || DEFAULT_RAGFLOW_BASE_URL).replace(/\/+$/, '');
 
 const publicError = (payload, fallback = {}) => {
   const source = payload && typeof payload === 'object' ? payload : {};
@@ -36,7 +37,7 @@ const safeJsonBody = (body) => {
 
 export function createApp({
   fetchImpl = globalThis.fetch,
-  ragflowBaseUrl = process.env.RAGFLOW_BASE_URL || 'http://localhost:8000',
+  ragflowBaseUrl = DEFAULT_RAGFLOW_BASE_URL,
   serviceUserId = SERVICE_USER_ID,
   expectedApiVersion = EXPECTED_API_VERSION,
   frontendDist,
@@ -192,4 +193,4 @@ export function createApp({
   return app;
 }
 
-export { MAX_UPLOAD_BYTES, EXPECTED_API_VERSION, publicError, normalizeBaseUrl };
+export { MAX_UPLOAD_BYTES, EXPECTED_API_VERSION, DEFAULT_RAGFLOW_BASE_URL, publicError, normalizeBaseUrl };

@@ -95,6 +95,7 @@ function App() {
   const [chunks, setChunks] = useState([]);
   const [progress, setProgress] = useState([]);
   const [chunkCounts, setChunkCounts] = useState({});
+  const [jobIds, setJobIds] = useState({});
   const [search, setSearch] = useState('');
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState(null);
@@ -137,10 +138,11 @@ function App() {
 
   const loadDocument = useCallback(async (docId) => {
     if (!docId) return;
+    const jobQuery = jobIds[docId] ? `?job_id=${encodeURIComponent(jobIds[docId])}` : '';
     const [detailResult, chunksResult, progressResult] = await Promise.allSettled([
       requestJson(`/api/documents/${encodeURIComponent(docId)}`),
       requestJson(`/api/documents/${encodeURIComponent(docId)}/chunks`),
-      requestJson(`/api/documents/${encodeURIComponent(docId)}/ingestion-progress`),
+      requestJson(`/api/documents/${encodeURIComponent(docId)}/ingestion-progress${jobQuery}`),
     ]);
     if (detailResult.status === 'fulfilled') setSelectedDocument(detailResult.value);
     if (chunksResult.status === 'fulfilled') {
@@ -152,7 +154,7 @@ function App() {
     if ([detailResult, chunksResult, progressResult].some((result) => result.status === 'rejected' && result.reason?.status !== 404)) {
       showToast('The selected document could not be fully loaded', 'error');
     }
-  }, [showToast]);
+  }, [jobIds, showToast]);
 
   useEffect(() => { loadDocument(selectedId); }, [loadDocument, selectedId]);
 
@@ -199,6 +201,11 @@ function App() {
       setSelectedDocument(null);
       setChunks([]);
       setProgress([]);
+      setJobIds((current) => {
+        const next = { ...current };
+        delete next[selectedId];
+        return next;
+      });
       showToast('Document removed from the workspace');
     } catch (error) {
       showToast(error.payload?.message || 'Document could not be deleted', 'error');
@@ -225,6 +232,7 @@ function App() {
       }
       const nextDocuments = await requestJson('/api/documents');
       setDocuments(nextDocuments);
+      if (result?.doc_id && result?.job_id) setJobIds((current) => ({ ...current, [result.doc_id]: result.job_id }));
       setSelectedId(result.doc_id);
       setIngestOpen(false);
       setIngestText('');

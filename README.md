@@ -1,17 +1,16 @@
 # docmesh-ragflow-web
 
-React + Express BFF UI mockup for the `ragflow-api` v0.1.0 contract.
+React + Express BFF UI for the `ragflow-api` v0.1.0 contract.
 
 ## Architecture
 
 ```text
 React / Vite  →  same-origin /api  →  Express BFF  →  ragflow-api
-                                      └─ mock upstream (default preview mode)
 ```
 
 - `apps/frontend`: React UI for the document lifecycle, ingestion progress, public chunks, query context, and API monitor.
 - `apps/bff`: Express adapter that owns the upstream URL, fixed `X-User-Id: ragflow` scope, version/readiness guard, multipart forwarding, and public error projection.
-- `apps/bff/src/mock-upstream.js`: disposable in-memory RAG Flow API implementation for local UI preview. It follows the documented paths and response shapes without requiring a running backend.
+- `apps/bff/src/mock-upstream.js`: optional disposable in-memory RAG Flow API implementation for tests or isolated UI preview.
 
 The UI calls only `/api/*`. The browser cannot override the BFF's service identity.
 
@@ -29,12 +28,14 @@ Open:
 - React/Vite development UI: <http://localhost:5173>
 - Production-style BFF root: <http://localhost:4000>
 
-The BFF defaults to the in-memory mock upstream so the lifecycle can be exercised immediately. To serve the built frontend through Express:
+The BFF connects to `http://ragflow:8000` by default. To serve the built frontend through Express:
 
 ```sh
 npm run build
 npm start
 ```
+
+Use `RAGFLOW_MODE=mock` only when the live service is intentionally unavailable and a disposable in-memory preview is needed.
 
 ## Connect to the real RAG Flow API
 
@@ -42,7 +43,7 @@ The adapter uses the exact v0.1.0 paths documented in `wiki/entities/ragflow-api
 
 ```sh
 RAGFLOW_MODE=proxy \
-RAGFLOW_BASE_URL=http://localhost:8000 \
+RAGFLOW_BASE_URL=http://ragflow:8000 \
 RAGFLOW_USER_ID=ragflow \
 EXPECTED_RAGFLOW_VERSION=0.1.0 \
 npm start
