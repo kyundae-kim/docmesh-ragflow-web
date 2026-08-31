@@ -4,20 +4,36 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const EXPECTED_API_VERSION = '0.1.0';
+const EXPECTED_OPENAPI_VERSION = '3.1.0';
 const SERVICE_USER_ID = 'ragflow';
 const DEFAULT_RAGFLOW_BASE_URL = 'http://ragflow:8000';
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MULTIPART_OVERHEAD_BYTES = 1 * 1024 * 1024;
+const MAX_MULTIPART_REQUEST_BYTES = MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD_BYTES;
 
 const normalizeBaseUrl = (value) => String(value || DEFAULT_RAGFLOW_BASE_URL).replace(/\/+$/, '');
 
+const publicIssue = (issue) => {
+  if (!issue || typeof issue !== 'object' || Array.isArray(issue)) return null;
+  const location = Array.isArray(issue.location)
+    ? issue.location.filter((part) => typeof part === 'string' || Number.isInteger(part))
+    : null;
+  return {
+    ...(location?.length ? { location } : {}),
+    ...(typeof issue.message === 'string' ? { message: issue.message } : {}),
+    ...(typeof issue.type === 'string' ? { type: issue.type } : {}),
+  };
+};
+
 const publicError = (payload, fallback = {}) => {
   const source = payload && typeof payload === 'object' ? payload : {};
+  const issues = Array.isArray(source.issues) ? source.issues.map(publicIssue).filter(Boolean) : [];
   return {
     code: typeof source.code === 'string' ? source.code : (fallback.code || 'upstream_error'),
     category: typeof source.category === 'string' ? source.category : (fallback.category || 'unavailable'),
     retryable: typeof source.retryable === 'boolean' ? source.retryable : (fallback.retryable ?? true),
     message: typeof source.message === 'string' ? source.message : (fallback.message || 'RAG Flow API request failed'),
-    ...(Array.isArray(source.issues) ? { issues: source.issues } : {}),
+    ...(issues.length ? { issues } : {}),
   };
 };
 
@@ -40,6 +56,7 @@ export function createApp({
   ragflowBaseUrl = DEFAULT_RAGFLOW_BASE_URL,
   serviceUserId = SERVICE_USER_ID,
   expectedApiVersion = EXPECTED_API_VERSION,
+  expectedOpenapiVersion = EXPECTED_OPENAPI_VERSION,
   frontendDist,
 } = {}) {
   const app = express();
@@ -48,6 +65,18 @@ export function createApp({
     storage: multer.memoryStorage(),
     limits: { fileSize: MAX_UPLOAD_BYTES },
   });
+  const enforceMultipartRequestLimit = (req, res, next) => {
+    const contentLength = Number(req.headers['content-length']);
+    if (Number.isFinite(contentLength) && contentLength > MAX_MULTIPART_REQUEST_BYTES) {
+      return res.status(413).json(publicError({
+        code: 'request_too_large',
+        category: 'validation',
+        retryable: false,
+        message: 'The request is larger than the allowed limit',
+      }));
+    }
+    return next();
+  };
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
@@ -96,13 +125,20 @@ export function createApp({
       parseResponse(ready),
     ]);
     const apiVersion = openapiBody?.info?.version || null;
-    const compatible = apiVersion === expectedApiVersion;
+    const openapiVersion = openapiBody?.openapi || null;
+    const openapiPaths = openapiBody?.paths && typeof openapiBody.paths === 'object' ? Object.keys(openapiBody.paths) : [];
+    const compatible = apiVersion === expectedApiVersion && openapiVersion === expectedOpenapiVersion;
     const available = openapi.ok && live.ok && ready.ok && compatible;
     const response = {
       apiVersion,
       expectedVersion: expectedApiVersion,
+      openapiVersion,
+      expectedOpenapiVersion,
       compatible,
       available,
+      capabilities: {
+        ingestionStepStatuses: openapiPaths.includes('/documents/{doc_id}/ingestion-step-statuses'),
+      },
       live: liveBody || { status: 'unavailable' },
       ready: readyBody || { status: 'unavailable', services: [] },
     };
@@ -126,13 +162,18 @@ export function createApp({
     return sendUpstream(res, await requestUpstream(`/documents/${encodeURIComponent(req.params.docId)}/ingestion-progress${query}`));
   });
 
+  app.get('/api/documents/:docId/ingestion-step-statuses', async (req, res) => {
+    const query = req.query.job_id ? `?job_id=${encodeURIComponent(req.query.job_id)}` : '';
+    return sendUpstream(res, await requestUpstream(`/documents/${encodeURIComponent(req.params.docId)}/ingestion-step-statuses${query}`));
+  });
+
   app.post('/api/documents/text', async (req, res) => {
     const body = safeJsonBody(req.body);
     const payload = JSON.stringify({ text: body.text, source: body.source });
     return sendUpstream(res, await requestUpstream('/documents/text', { method: 'POST', body: payload }));
   });
 
-  app.post('/api/documents/file', (req, res, next) => {
+  app.post('/api/documents/file', enforceMultipartRequestLimit, (req, res, next) => {
     upload.single('file')(req, res, async (error) => {
       if (error) return next(error);
       if (!req.file) {
@@ -182,6 +223,22 @@ export function createApp({
         message: 'Files must be smaller than 10 MiB',
       }));
     }
+    if (error?.type === 'entity.parse.failed') {
+      return res.status(400).json(publicError({
+        code: 'invalid_request',
+        category: 'validation',
+        retryable: false,
+        message: 'The JSON request could not be parsed',
+      }));
+    }
+    if (error instanceof multer.MulterError || error?.message === 'Multipart: Boundary not found' || error?.message === 'Unexpected end of form') {
+      return res.status(400).json(publicError({
+        code: 'invalid_request',
+        category: 'validation',
+        retryable: false,
+        message: 'The multipart request could not be parsed',
+      }));
+    }
     return res.status(500).json(publicError(null, {
       code: 'internal_error',
       category: 'internal',
@@ -193,4 +250,12 @@ export function createApp({
   return app;
 }
 
-export { MAX_UPLOAD_BYTES, EXPECTED_API_VERSION, DEFAULT_RAGFLOW_BASE_URL, publicError, normalizeBaseUrl };
+export {
+  MAX_UPLOAD_BYTES,
+  MAX_MULTIPART_REQUEST_BYTES,
+  EXPECTED_API_VERSION,
+  EXPECTED_OPENAPI_VERSION,
+  DEFAULT_RAGFLOW_BASE_URL,
+  publicError,
+  normalizeBaseUrl,
+};
