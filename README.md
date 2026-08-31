@@ -61,4 +61,18 @@ curl -i http://localhost:4000/api/documents
 curl -i http://localhost:4000/
 ```
 
-The test suite covers the exact upstream paths, fixed server-side scope header, multipart and JSON boundary handling, public error projection, version/readiness and capability status, `204` deletion, and React lifecycle/tab smoke tests.
+The regular test suite covers the exact upstream paths, fixed server-side scope header, multipart and JSON boundary handling, public error projection, version/readiness and capability status, `204` deletion, and React lifecycle/tab smoke tests.
+
+### Live integration test
+
+`npm run test:live` (separate from the regular `npm test` suite) runs non-mutating BFF tests against the live RAG Flow API. It checks the runtime OpenAPI/health contract, server-scoped document listing, public validation errors, an existing-document read lifecycle, ingestion `job_id` filtering, API-11 final statuses, and a real query through the BFF.
+
+The default target is `http://ragflow:8000`. Override it and the service scope when needed:
+
+```sh
+RAGFLOW_LIVE_BASE_URL=http://ragflow:8000 \
+RAGFLOW_LIVE_USER_ID=ragflow \
+npm run test:live
+```
+
+The live suite does not ingest or delete documents. If the scope has no documents, the existing-document and query checks are reported as skipped while contract/list checks still run. Set `RAGFLOW_LIVE_QUERY=0` to omit the model query when only API/read-model verification is desired.

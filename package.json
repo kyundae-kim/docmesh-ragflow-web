@@ -10,6 +10,7 @@
     "dev": "concurrently -k -n bff,web -c magenta,cyan \"npm run dev --workspace apps/bff\" \"npm run dev --workspace apps/frontend\"",
     "build": "npm run build --workspace apps/frontend",
     "test": "npm run test --workspaces --if-present",
+    "test:live": "npm run test:live --workspace apps/bff",
     "start": "npm run start --workspace apps/bff"
   },
   "devDependencies": {
