@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const fallbackStatus = {
   apiVersion: null,
   expectedVersion: '0.1.0',
+  openapiVersion: null,
+  expectedOpenapiVersion: '3.1.0',
   compatible: false,
   available: false,
+  capabilities: { ingestionStepStatuses: false },
   live: { status: 'unknown' },
   ready: { status: 'unknown', services: [] },
 };
@@ -54,6 +57,12 @@ async function requestJson(url, options = {}) {
     throw error;
   }
   return payload;
+}
+
+function formatApiError(error, fallback) {
+  const payload = error?.payload;
+  if (payload?.code) return `${payload.message || fallback} · ${payload.code}`;
+  return payload?.message || fallback;
 }
 
 function Icon({ name, size = 18, strokeWidth = 1.8 }) {
@@ -130,6 +139,7 @@ function App() {
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [chunks, setChunks] = useState([]);
   const [progress, setProgress] = useState([]);
+  const [stepStatuses, setStepStatuses] = useState({});
   const [chunkCounts, setChunkCounts] = useState({});
   const [jobIds, setJobIds] = useState({});
   const [search, setSearch] = useState('');
@@ -144,12 +154,21 @@ function App() {
   const [ingestFile, setIngestFile] = useState(null);
   const [ingestLoading, setIngestLoading] = useState(false);
   const [toast, setToast] = useState(null);
+  const toastTimerRef = useRef(null);
 
-  const apiReady = Boolean(status.compatible && status.ready?.status === 'ready' && status.live?.status === 'ok');
+  const apiReady = Boolean(status.available !== false && status.compatible && status.ready?.status === 'ready' && status.live?.status === 'ok');
 
   const showToast = useCallback((message, tone = 'info') => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     setToast({ message, tone });
-    window.setTimeout(() => setToast(null), 3600);
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToast(null);
+    }, 3600);
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
   }, []);
 
   const loadWorkspace = useCallback(async () => {
@@ -165,21 +184,27 @@ function App() {
       setDocuments(nextDocuments);
       setSelectedId((current) => current || nextDocuments[0]?.doc_id || null);
     } else {
-      showToast(documentsResult.reason?.payload?.message || 'Could not load documents', 'error');
+      showToast(formatApiError(documentsResult.reason, 'Could not load documents'), 'error');
     }
     setWorkspaceLoading(false);
   }, [showToast]);
 
   useEffect(() => { loadWorkspace(); }, [loadWorkspace]);
 
+  const supportsStepStatuses = status.capabilities?.ingestionStepStatuses === true;
+
   const loadDocument = useCallback(async (docId) => {
     if (!docId) return;
     const jobQuery = jobIds[docId] ? `?job_id=${encodeURIComponent(jobIds[docId])}` : '';
-    const [detailResult, chunksResult, progressResult] = await Promise.allSettled([
+    const requests = [
       requestJson(`/api/documents/${encodeURIComponent(docId)}`),
       requestJson(`/api/documents/${encodeURIComponent(docId)}/chunks`),
       requestJson(`/api/documents/${encodeURIComponent(docId)}/ingestion-progress${jobQuery}`),
-    ]);
+    ];
+    if (supportsStepStatuses) {
+      requests.push(requestJson(`/api/documents/${encodeURIComponent(docId)}/ingestion-step-statuses${jobQuery}`));
+    }
+    const [detailResult, chunksResult, progressResult, stepStatusesResult] = await Promise.allSettled(requests);
     if (detailResult.status === 'fulfilled') setSelectedDocument(detailResult.value);
     if (chunksResult.status === 'fulfilled') {
       const nextChunks = Array.isArray(chunksResult.value) ? chunksResult.value : [];
@@ -187,10 +212,19 @@ function App() {
       setChunkCounts((current) => ({ ...current, [docId]: nextChunks.length }));
     }
     if (progressResult.status === 'fulfilled') setProgress(Array.isArray(progressResult.value) ? progressResult.value : []);
-    if ([detailResult, chunksResult, progressResult].some((result) => result.status === 'rejected' && result.reason?.status !== 404)) {
-      showToast('The selected document could not be fully loaded', 'error');
+    if (stepStatusesResult?.status === 'fulfilled') {
+      const nextStepStatuses = stepStatusesResult.value;
+      if (nextStepStatuses && typeof nextStepStatuses === 'object' && !Array.isArray(nextStepStatuses)) {
+        setStepStatuses(nextStepStatuses);
+      }
     }
-  }, [jobIds, showToast]);
+    const results = [detailResult, chunksResult, progressResult];
+    if (supportsStepStatuses) results.push(stepStatusesResult);
+    const failedResult = results.find((result) => result.status === 'rejected' && result.reason?.status !== 404);
+    if (failedResult) {
+      showToast(formatApiError(failedResult.reason, 'The selected document could not be fully loaded'), 'error');
+    }
+  }, [jobIds, showToast, supportsStepStatuses]);
 
   useEffect(() => { loadDocument(selectedId); }, [loadDocument, selectedId]);
 
@@ -200,8 +234,17 @@ function App() {
     return documents.filter((document) => `${document.source} ${document.doc_id}`.toLowerCase().includes(term));
   }, [documents, search]);
 
-  const completedSteps = progress.filter((item) => item.status === 'completed').length;
-  const progressPercent = progress.length ? Math.round((completedSteps / progress.length) * 100) : 0;
+  const stepStatusEntries = Object.entries(stepStatuses);
+  const pipelineSteps = stepStatusEntries.length
+    ? stepStatusEntries.map(([step_name, pipelineStatus]) => ({ step_name, status: pipelineStatus }))
+    : progress.length
+      ? progress
+      : ['load', 'preprocess', 'chunking', 'embedding', 'vector_store', 'chunk_persistence'].map((step_name) => ({ step_name, status: 'completed' }));
+  const pipelineStepCount = stepStatusEntries.length || progress.length;
+  const completedSteps = stepStatusEntries.length
+    ? stepStatusEntries.filter(([, pipelineStatus]) => pipelineStatus === 'completed').length
+    : progress.filter((item) => item.status === 'completed').length;
+  const progressPercent = pipelineStepCount ? Math.round((completedSteps / pipelineStepCount) * 100) : 100;
   const selectedListDocument = documents.find((document) => document.doc_id === selectedId);
 
   const handleQuery = async (event) => {
@@ -216,7 +259,7 @@ function App() {
       });
       setAnswer(result);
     } catch (error) {
-      showToast(error.payload?.message || 'Query failed', 'error');
+      showToast(formatApiError(error, 'Query failed'), 'error');
     } finally {
       setQueryLoading(false);
     }
@@ -237,6 +280,7 @@ function App() {
       setSelectedDocument(null);
       setChunks([]);
       setProgress([]);
+      setStepStatuses({});
       setJobIds((current) => {
         const next = { ...current };
         delete next[selectedId];
@@ -244,7 +288,7 @@ function App() {
       });
       showToast('Document removed from the workspace');
     } catch (error) {
-      showToast(error.payload?.message || 'Document could not be deleted', 'error');
+      showToast(formatApiError(error, 'Document could not be deleted'), 'error');
     }
   };
 
@@ -276,7 +320,7 @@ function App() {
       setIngestFile(null);
       showToast(`${result.source} is now in the ingestion queue`, 'success');
     } catch (error) {
-      showToast(error.payload?.message || 'Ingestion failed', 'error');
+      showToast(formatApiError(error, 'Ingestion failed'), 'error');
     } finally {
       setIngestLoading(false);
     }
@@ -364,9 +408,9 @@ function App() {
               {selectedDocument ? <>
                 <div className="selected-source"><span className="file-badge large">{fileKind(selectedDocument.source)}</span><div><h3>{selectedDocument.source}</h3><span>{selectedDocument.doc_id}</span></div><StatusPill status="ready">ready</StatusPill></div>
                 <div className="metadata-grid"><div><span>Created</span><strong>{formatDate(selectedDocument.created_at)}</strong></div><div><span>Chunks</span><strong>{chunks.length || chunkCounts[selectedId] || '—'}</strong></div><div><span>Visibility</span><strong><Icon name="lock" size={12} /> scoped</strong></div></div>
-                <div className="pipeline-heading"><div><span className="card-kicker">Ingestion trail</span><strong>{progressPercent || 100}% complete</strong></div><span className="pipeline-job">job linked</span></div>
-                <div className="progress-track"><span style={{ width: `${progressPercent || 100}%` }} /></div>
-                <div className="timeline">{(progress.length ? progress : ['load', 'preprocess', 'chunking', 'embedding', 'vector_store', 'chunk_persistence'].map((step_name, index) => ({ step_name, status: index < 6 ? 'completed' : 'pending' }))).map((step, index) => <div className="timeline-step" key={`${step.step_name}-${index}`}><span className={`timeline-icon ${step.status}`}><Icon name={step.status === 'completed' ? 'check' : step.status === 'running' ? 'activity' : 'clock'} size={12} /></span><span>{step.step_name.replace('_', ' ')}</span></div>)}</div>
+                <div className="pipeline-heading"><div><span className="card-kicker">Ingestion trail</span><strong>{progressPercent}% complete</strong></div><span className="pipeline-job">{stepStatusEntries.length ? `${stepStatusEntries.length} final statuses` : 'progress history'}</span></div>
+                <div className="progress-track"><span style={{ width: `${progressPercent}%` }} /></div>
+                <div className="timeline">{pipelineSteps.map((step, index) => <div className="timeline-step" key={`${step.step_name}-${index}`}><span className={`timeline-icon ${step.status}`}><Icon name={step.status === 'completed' ? 'check' : step.status === 'failed' ? 'alert' : step.status === 'running' ? 'activity' : 'clock'} size={12} /></span><span>{step.step_name.replaceAll('_', ' ')}</span></div>)}</div>
                 <div className="chunk-preview-heading"><span className="card-kicker">Public chunk preview</span><span>{chunks.length} blocks</span></div>
                 <div className="chunk-preview">{chunks.slice(0, 2).map((chunk) => <div className="chunk-row" key={chunk.chunk_id}><span className="chunk-index">{chunk.chunk_id.split('-').pop()}</span><p>{chunk.content}</p></div>)}</div>
               </> : <EmptyState icon="file" title="Select a source" description="Choose a document to inspect its public metadata, chunks, and ingestion trail." />}
@@ -392,7 +436,7 @@ function App() {
               <div className="card-heading"><div><p className="card-kicker">Connection</p><h2>Runtime configuration</h2></div><StatusPill status={apiReady ? 'ready' : 'offline'}>{apiReady ? 'connected' : 'guarded'}</StatusPill></div>
               <div className="settings-list">
                 <div className="settings-row"><span>Upstream service</span><strong>RAG Flow API</strong></div>
-                <div className="settings-row"><span>Configured target</span><code>http://ragflow:8000</code></div>
+                <div className="settings-row"><span>Configured target</span><strong>Server-managed target</strong></div>
                 <div className="settings-row"><span>Contract version</span><strong>{status.apiVersion || '—'}</strong></div>
                 <div className="settings-row"><span>Compatibility</span><strong>{status.compatible ? 'Compatible' : 'Needs review'}</strong></div>
               </div>

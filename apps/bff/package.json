@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "test": "node --test"
+    "test": "node --test test/app.test.js",
+    "test:live": "node --test scripts/live.integration.js"
   },
   "dependencies": {
     "express": "^5.1.0",

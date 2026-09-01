@@ -48,6 +48,7 @@ const seedDocuments = [
   },
 ];
 
+const INGESTION_STEPS = ['load', 'preprocess', 'chunking', 'embedding', 'vector_store', 'chunk_persistence'];
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const response = (body, status = 200) => new Response(body === null ? null : JSON.stringify(body), {
   status,
@@ -76,16 +77,25 @@ const chunksView = (doc) => doc.chunks.map((content, index) => ({
 }));
 
 const progressView = (doc) => {
-  const steps = ['load', 'preprocess', 'chunking', 'embedding', 'vector_store', 'chunk_persistence'];
-  const completedUntil = doc.status === 'ready' ? steps.length : 4;
-  return steps.map((step_name, index) => ({
+  const completedUntil = doc.status === 'ready' ? INGESTION_STEPS.length : 4;
+  return INGESTION_STEPS.map((step_name, index) => ({
     progress_id: `${doc.job_id}-${step_name}`,
     job_id: doc.job_id,
     doc_id: doc.doc_id,
+    source: doc.source,
     step_name,
     step_order: index + 1,
     status: index < completedUntil ? 'completed' : index === completedUntil ? 'running' : 'pending',
+    created_at: doc.created_at,
   }));
+};
+
+const stepStatusesView = (doc) => {
+  const completedUntil = doc.status === 'ready' ? INGESTION_STEPS.length : 4;
+  return Object.fromEntries(INGESTION_STEPS.map((step_name, index) => [
+    step_name,
+    index < completedUntil ? 'completed' : index === completedUntil ? 'running' : 'pending',
+  ]));
 };
 
 export function createMockFetch() {
@@ -103,7 +113,22 @@ export function createMockFetch() {
     }
 
     if (method === 'GET' && path === '/openapi.json') {
-      return response({ openapi: '3.1.0', info: { title: 'RAG Flow API', version: API_VERSION }, paths: {} });
+      return response({
+        openapi: '3.1.0',
+        info: { title: 'RAG Flow API', version: API_VERSION },
+        paths: {
+          '/health/live': { get: {} },
+          '/health/ready': { get: {} },
+          '/documents/text': { post: {} },
+          '/documents/file': { post: {} },
+          '/documents': { get: {} },
+          '/documents/{doc_id}': { get: {}, delete: {} },
+          '/documents/{doc_id}/chunks': { get: {} },
+          '/documents/{doc_id}/ingestion-progress': { get: {} },
+          '/documents/{doc_id}/ingestion-step-statuses': { get: {} },
+          '/query': { post: {} },
+        },
+      });
     }
     if (method === 'GET' && path === '/health/live') return response({ status: 'ok' });
     if (method === 'GET' && path === '/health/ready') {
@@ -117,6 +142,7 @@ export function createMockFetch() {
     const detailMatch = path.match(/^\/documents\/([^/]+)$/);
     const chunksMatch = path.match(/^\/documents\/([^/]+)\/chunks$/);
     const progressMatch = path.match(/^\/documents\/([^/]+)\/ingestion-progress$/);
+    const stepStatusesMatch = path.match(/^\/documents\/([^/]+)\/ingestion-step-statuses$/);
     if (detailMatch) {
       const doc = documents.get(decodeURIComponent(detailMatch[1]));
       if (method === 'GET') return doc ? response(documentView(doc)) : response(error('document_not_found', 'not_found', false, 'Document was not found'), 404);
@@ -135,6 +161,14 @@ export function createMockFetch() {
       if (!doc) return response(error('document_not_found', 'not_found', false, 'Document was not found'), 404);
       const jobId = url.searchParams.get('job_id');
       return response(jobId && jobId !== doc.job_id ? [] : progressView(doc));
+    }
+    if (method === 'GET' && stepStatusesMatch) {
+      const doc = documents.get(decodeURIComponent(stepStatusesMatch[1]));
+      if (!doc) return response(error('document_not_found', 'not_found', false, 'Document was not found'), 404);
+      const jobId = url.searchParams.get('job_id');
+      return response(jobId && jobId !== doc.job_id
+        ? Object.fromEntries(INGESTION_STEPS.map((step_name) => [step_name, 'not_started']))
+        : stepStatusesView(doc));
     }
 
     if (method === 'POST' && path === '/documents/text') {

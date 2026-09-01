@@ -1,75 +1,4 @@
 services:
-  milvus-etcd:
-    image: quay.io/coreos/etcd:v3.5.18
-    environment:
-      - ETCD_AUTO_COMPACTION_MODE=revision
-      - ETCD_AUTO_COMPACTION_RETENTION=1000
-      - ETCD_QUOTA_BACKEND_BYTES=4294967296
-      - ETCD_SNAPSHOT_COUNT=50000
-    command: etcd -advertise-client-urls=http://milvus-etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
-    healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-
-  milvus-minio:
-    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
-    environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-    command: minio server /minio_data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-
-  milvus:
-    image: milvusdb/milvus:v2.6.0-rc1
-    command: ["milvus", "run", "standalone"]
-    security_opt:
-      - seccomp:unconfined
-    environment:
-      ETCD_ENDPOINTS: milvus-etcd:2379
-      MINIO_ADDRESS: milvus-minio:9000
-      MQ_TYPE: woodpecker
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
-      interval: 30s
-      start_period: 90s
-      timeout: 20s
-      retries: 3
-    restart: unless-stopped
-    ports:
-      - 19530
-      - 9091
-    depends_on:
-      - "milvus-etcd"
-      - "milvus-minio"
-
-  attu:
-    image: zilliz/attu:v2.6
-    ports:
-      - 3000
-    environment:
-      - MILVUS_URL=milvus:19530
-    depends_on:
-      - milvus
-    restart: unless-stopped
-
-  ollama:
-    image: ollama/ollama:latest
-
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    restart: unless-stopped
-    ports:
-      - 80
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@example.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-
   minio:
     image: minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1
     restart: unless-stopped
@@ -87,38 +16,36 @@ services:
       retries: 5
 
   ragflow:
-    image: ghcr.io/kyundae-kim/ragflow-api:v0.1.0
+    image: ghcr.io/kyundae-kim/ragflow-api:v0.2.0
     environment:
-      - RAGFLOW_METADATA_DATABASE_URL=sqlite+pysqlite:///./data/rag-metadata.db
-      - RAGFLOW_CHUNK_SIZE=512
-      - RAGFLOW_CHUNK_OVERLAP=64
-      - RAGFLOW_CHECK_ON_STARTUP=true
-      - RAGFLOW_MAX_UPLOAD_BYTES=10485760
-      - OLLAMA_HOST=http://ollama:11434
-      - OLLAMA_EMBEDDING_MODEL=bge-m3
-      - OLLAMA_GENERATION_MODEL=llama3.2
-      - OLLAMA_VERIFY_SSL=false
-      - OLLAMA_FOLLOW_REDIRECTS=true
-      - OLLAMA_REQUEST_TIMEOUT_SECONDS=120
-      - OLLAMA_MAX_RETRIES=2
-      - MILVUS_ENDPOINT=http://milvus:19530
-      - MILVUS_DB_NAME=default
-      - MILVUS_COLLECTION=rag_chunks
-      - MILVUS_SECURE=false
-      - MILVUS_CONNECT_TIMEOUT_SECONDS=10
-      - MILVUS_REQUEST_TIMEOUT_SECONDS=30
-      - MILVUS_MAX_RETRIES=3
-      - DMS_METADATA_BACKEND=sqlite
-      - DMS_SQLITE_PATH=./data/dms.db
-      - DMS_MINIO_ENDPOINT=minio:9000
-      - DMS_MINIO_ACCESS_KEY=admin
-      - DMS_MINIO_SECRET_KEY=password
-      - DMS_MINIO_BUCKET=documents
-      - DMS_MINIO_SECURE=false
+      RAGFLOW_METADATA_DATABASE_URL: 'sqlite+pysqlite:///:memory:'
+      RAGFLOW_CHUNK_SIZE: 512
+      RAGFLOW_CHUNK_OVERLAP: 64
+      RAGFLOW_CHECK_ON_STARTUP: 'true'
+      RAGFLOW_MAX_UPLOAD_BYTES: 10485760
+      OLLAMA_HOST: 'http://192.168.219.106:11434'
+      OLLAMA_EMBEDDING_MODEL: bge-m3
+      OLLAMA_GENERATION_MODEL: llama3.2
+      OLLAMA_VERIFY_SSL: 'false'
+      OLLAMA_FOLLOW_REDIRECTS: 'true'
+      OLLAMA_REQUEST_TIMEOUT_SECONDS: 120
+      OLLAMA_MAX_RETRIES: 2
+      MILVUS_ENDPOINT: /app/milvus.db
+      MILVUS_DB_NAME: default
+      MILVUS_COLLECTION: rag_chunks
+      MILVUS_SECURE: 'false'
+      MILVUS_CONNECT_TIMEOUT_SECONDS: 10
+      MILVUS_REQUEST_TIMEOUT_SECONDS: 30
+      MILVUS_MAX_RETRIES: 3
+      DMS_METADATA_BACKEND: sqlite
+      DMS_SQLITE_PATH: ':memory:'
+      DMS_MINIO_ENDPOINT: minio:9000
+      DMS_MINIO_ACCESS_KEY: admin
+      DMS_MINIO_SECRET_KEY: password
+      DMS_MINIO_BUCKET: documents
+      DMS_MINIO_SECURE: 'false'
     restart: unless-stopped
     ports:
       - 8000
     depends_on:
       - minio
-      - milvus
-      - ollama
